@@ -1,0 +1,16 @@
+{
+  "id": "cycleplus",
+  "name": "CyclePlus",
+  "version": "0.01",
+  "description": "A GPS computer for cycling, tracking speed, distance, and route.",
+  "icon": "app.png",
+  "tags": "gps,sports,tools",
+  "supports":,
+  "storage": [
+    {"name":"cycleplus.app.js","url":"app.js"},
+    {"name":"cycleplus.settings.js","url":"settings.js"},
+    {"name":"cycleplus.utils.js","url":"utils.js"},
+    {"name":"cycleplus.json", "evaluate": true, "content": "{}"}
+  ],
+  "data": [{"name":"cycleplus.*.json"}]
+}
