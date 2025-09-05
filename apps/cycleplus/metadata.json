@@ -5,7 +5,7 @@
   "description": "A GPS computer for cycling, tracking speed, distance, and route.",
   "icon": "app.png",
   "tags": "gps,sports,tools",
-  "supports":,
+  "supports": ["banglejs"],
   "storage": [
     {"name":"cycleplus.app.js","url":"app.js"},
     {"name":"cycleplus.settings.js","url":"settings.js"},
