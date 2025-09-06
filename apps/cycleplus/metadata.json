@@ -1,7 +1,7 @@
 {
   "id": "cycleplus",
   "name": "Cycle Plus",
-  "version": "6.1",
+  "version": "6.5",
   "description": "A GPS cycling computer with ghost race and commute tracking (Work/Home).",
   "icon": "app.png",
   "tags": "gps,sports,bike,cycle,commute",
