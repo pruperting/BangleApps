@@ -1,18 +1,13 @@
 /*
  * =============================================================
- * Cycle Plus - v6.0 (Stability and UI Fixes)
+ * Cycle Plus - v6.1 (Menu Rendering Fix)
  * =============================================================
  * A GPS cycling computer with ride saving and ghost comparison.
  *
- * - FIX: Resolved menu rendering glitches (ghost selections,
- * flickering background) by clearing the screen before
- * drawing menus.
- * - FIX: Prevented crashes on long rides by optimizing GPS track
- * storage, reducing memory usage by 80%.
- * - FIX: Stopped widget bar from flickering by integrating it
- * into the buffered draw cycle.
- * - UI: Re-added the distance display and implemented a new
- * layout with large speed on the left and distance on the right.
+ * - FIX: Resolved all menu rendering issues (ghost selections,
+ * background flashing, menu layering) by creating a central
+ * menu-handling function that ensures a clean screen state
+ * before any menu is displayed.
  * =============================================================
  */
 
@@ -145,14 +140,11 @@ function startRide(type) {
 
 function stopRide() {
   isRunning = false; // Pause the ride
-  if (drawInterval) clearInterval(drawInterval);
-  drawInterval = undefined;
-  clearWatch();
 
   const saveMenu = {
     "": { "title": "Ride Paused" },
     "Continue Ride": () => {
-      E.showMenu();
+      // Menu hides automatically on selection
       isRunning = true;
       setUI();
       drawInterval = setInterval(draw, 1000);
@@ -170,8 +162,7 @@ function stopRide() {
     setTimeout(showStartMenu, 1000);
   };
   
-  g.clear(); // Fix: Clear screen before showing menu
-  E.showMenu(saveMenu);
+  showMenu(saveMenu);
 }
 
 function onGPS(fix) {
@@ -189,10 +180,8 @@ function onGPS(fix) {
     if (fix.lat !== undefined) {
       let lastPoint = track.length > 0 ? track[track.length - 1] : {lat: fix.lat, lon: fix.lon};
       
-      // Always calculate distance for accuracy
       distance += haversine(lastPoint.lat, lastPoint.lon, fix.lat, fix.lon);
 
-      // Memory optimization: only add a point to the track every 5 seconds
       if (getTime() - lastTrackTime > 5) {
         lastTrackTime = getTime();
         track.push({
@@ -258,26 +247,33 @@ function draw() {
     g.drawString(`${diffStr}s`, g.getWidth() - 4, g.getHeight() - 4);
   }
   
-  // Fix: Draw widgets into buffer to prevent flicker
   Bangle.drawWidgets();
-  
-  // Update the physical screen with our buffered drawing
   g.flip();
 }
 
 // ---------------------------
 // Menus
 // ---------------------------
+// FIX: Central menu function to prevent rendering conflicts
+function showMenu(menu) {
+  if (drawInterval) {
+    clearInterval(drawInterval);
+    drawInterval = undefined;
+  }
+  clearWatch();
+  g.clear();
+  E.showMenu(menu);
+}
+
 function showStartMenu() {
   const startMenu = {
     "": { "title": "Cycle Plus" },
-    "Ride to Work": () => { E.showMenu(); startRide("work"); },
-    "Ride to Home": () => { E.showMenu(); startRide("home"); },
+    "Ride to Work": () => startRide("work"),
+    "Ride to Home": () => startRide("home"),
     "Screen Options": showScreenMenu,
     "Exit": cleanupAndExit,
   };
-  g.clear(); // Fix: Clear screen before showing menu
-  E.showMenu(startMenu);
+  showMenu(startMenu);
 }
 
 function showScreenMenu() {
@@ -294,8 +290,7 @@ function showScreenMenu() {
     },
     "< Back": showStartMenu
   };
-  g.clear(); // Fix: Clear screen before showing menu
-  E.showMenu(screenMenu);
+  showMenu(screenMenu);
 }
 
 
@@ -309,10 +304,8 @@ function setUI() {
 
 function cleanupAndExit() {
   resetState();
-  // Restore original screen settings
   Bangle.setLCDMode(); 
   Bangle.setLCDTimeout(systemTimeout);
-  // Exit to the clock
   load();
 }
 
@@ -323,14 +316,11 @@ Bangle.on('kill', cleanupAndExit);
 // Initial Execution
 // ---------------------------
 g.clear();
-
-// Set up screen buffering to prevent flicker
 Bangle.setLCDMode("doublebuffered");
 
-// Load settings and apply them
 loadSettings();
 applyScreenTimeout();
 
-// Show the first menu
+Bangle.loadWidgets();
 showStartMenu();
 
