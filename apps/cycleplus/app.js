@@ -1,13 +1,14 @@
 /*
  * =============================================================
- * Cycle Plus - v6.1 (Menu Rendering Fix)
+ * Cycle Plus - v6.4 (Final Crash & Glitch Fix)
  * =============================================================
  * A GPS cycling computer with ride saving and ghost comparison.
  *
- * - FIX: Resolved all menu rendering issues (ghost selections,
- * background flashing, menu layering) by creating a central
- * menu-handling function that ensures a clean screen state
- * before any menu is displayed.
+ * - FIX: Resolved "Unknown Watch" crash by removing the app's
+ * manual button cleanup and letting the Bangle.js menu system
+ * manage it, preventing a race condition.
+ * - FIX: Removed an aggressive clearWatch() on ride resume that
+ * was causing visual glitches in the menu.
  * =============================================================
  */
 
@@ -68,6 +69,7 @@ let ghostTrack = [];
 let timeDiff = 0; // in seconds
 let drawInterval;
 let lastTrackTime = 0; // For thinning GPS track data
+let stopRideWatch; // For managing the pause button watch
 
 // ---------------------------
 // Ghost Ride & Storage Logic
@@ -126,6 +128,7 @@ function resetState() {
 }
 
 function startRide(type) {
+  Bangle.setLCDMode("doublebuffered"); // Turn buffering ON for the ride screen
   resetState();
   rideType = type;
   loadGhost(type);
@@ -139,14 +142,21 @@ function startRide(type) {
 }
 
 function stopRide() {
-  isRunning = false; // Pause the ride
+  // CRASH FIX: Don't explicitly clear the watch. Let the menu system handle it.
+  isRunning = false;
+  if (drawInterval) {
+    clearInterval(drawInterval);
+    drawInterval = undefined;
+  }
 
   const saveMenu = {
     "": { "title": "Ride Paused" },
     "Continue Ride": () => {
-      // Menu hides automatically on selection
+      E.showMenu(); // Hide menu first
+      Bangle.setLCDMode("doublebuffered"); // Turn buffering back ON
       isRunning = true;
       setUI();
+      draw(); // Immediate redraw
       drawInterval = setInterval(draw, 1000);
     },
     "Discard & Exit": () => {
@@ -226,7 +236,6 @@ function draw() {
   g.setFont("6x8", 2).setFontAlign(0, 0);
   g.drawString("km", g.getWidth() * 5 / 6, 110);
 
-
   // Duration
   let durationStr = "00:00:00";
   if (startTime > 0) {
@@ -242,7 +251,7 @@ function draw() {
   // Ghost comparison
   if (ghostTrack.length > 0 && isRunning) {
     let diffStr = (timeDiff > 0 ? "+" : "") + Math.round(timeDiff);
-    g.setColor(timeDiff > 0 ? "#f00" : "#0f0");
+    g.setColor(timeDiff > 0 ? "#f00" : "#f0f");
     g.setFontAlign(1, 1);
     g.drawString(`${diffStr}s`, g.getWidth() - 4, g.getHeight() - 4);
   }
@@ -254,13 +263,8 @@ function draw() {
 // ---------------------------
 // Menus
 // ---------------------------
-// FIX: Central menu function to prevent rendering conflicts
 function showMenu(menu) {
-  if (drawInterval) {
-    clearInterval(drawInterval);
-    drawInterval = undefined;
-  }
-  clearWatch();
+  Bangle.setLCDMode(); 
   g.clear();
   E.showMenu(menu);
 }
@@ -298,8 +302,8 @@ function showScreenMenu() {
 // Event Listeners & Init
 // ---------------------------
 function setUI() {
-  clearWatch();
-  setWatch(stopRide, BTN2, { repeat: false, edge: "rising" });
+  // GLITCH FIX: Don't do a blanket clearWatch() as it conflicts with menu exit
+  stopRideWatch = setWatch(stopRide, BTN2, { repeat: false, edge: "rising" });
 }
 
 function cleanupAndExit() {
@@ -316,7 +320,6 @@ Bangle.on('kill', cleanupAndExit);
 // Initial Execution
 // ---------------------------
 g.clear();
-Bangle.setLCDMode("doublebuffered");
 
 loadSettings();
 applyScreenTimeout();
