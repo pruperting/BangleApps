@@ -1,15 +1,14 @@
 /*
  * =============================================================
- * Cycle Plus - v4.0 (New Logic)
+ * Cycle Plus - v5.0 (Screen Enhancements)
  * =============================================================
  * A GPS cycling computer with ride saving and ghost comparison.
  *
- * - REWRITE: Complete logic overhaul for stability and usability.
- * - App now starts with a clear "Start Ride" menu.
- * - No more "Waiting for GPS" screen; ride starts automatically
- * on the main screen when a GPS fix is acquired.
- * - BTN2 now pauses the ride and opens a context-aware save menu.
- * - Simplified UI flow to prevent crashes.
+ * - NEW: Screen options menu to force the screen to stay on,
+ * overriding the system timeout. This setting is saved.
+ * - FIX: Implemented double-buffered screen mode to eliminate
+ * all flickering during screen updates.
+ * - App now properly cleans up settings on exit.
  * =============================================================
  */
 
@@ -29,6 +28,34 @@ function haversine(lat1, lon1, lat2, lon2) {
   var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c; // distance in km
 }
+
+// ---------------------------
+// Settings Management
+// ---------------------------
+const SETTINGS_FILE = "cycleplus.settings.json";
+let settings;
+let systemTimeout; // To store the original system timeout
+
+function loadSettings() {
+  settings = storage.readJSON(SETTINGS_FILE, true) || {
+    keepScreenOn: false,
+  };
+  // Store the original system setting for timeout
+  systemTimeout = (require("Storage").readJSON("setting.json", 1) || {}).timeout;
+}
+
+function saveSettings() {
+  storage.writeJSON(SETTINGS_FILE, settings);
+}
+
+function applyScreenTimeout() {
+  if (settings.keepScreenOn) {
+    Bangle.setLCDTimeout(0); // 0 = stay on forever
+  } else {
+    Bangle.setLCDTimeout(systemTimeout); // Revert to system default
+  }
+}
+
 
 // ---------------------------
 // App State
@@ -103,13 +130,11 @@ function startRide(type) {
   rideType = type;
   loadGhost(type);
 
-  // Show the main screen immediately
   g.clear();
-  draw(); // Draw initial screen
+  draw();
   drawInterval = setInterval(draw, 1000);
-  setUI(); // Set up button to pause the ride
+  setUI();
 
-  // Turn on GPS and wait for a fix
   Bangle.setGPSPower(1, "cycleplus");
 }
 
@@ -119,12 +144,10 @@ function stopRide() {
   drawInterval = undefined;
   clearWatch();
 
-  // Define the menu object first
   const saveMenu = {
     "": { "title": "Ride Paused" },
     "Continue Ride": () => {
-      // Return to the ride screen
-      E.showMenu(); // Hide this menu
+      E.showMenu();
       isRunning = true;
       setUI();
       drawInterval = setInterval(draw, 1000);
@@ -132,11 +155,10 @@ function stopRide() {
     // The dynamic 'Save' option will be added below
     "Discard & Exit": () => {
       resetState();
-      load(); // Exit app
+      cleanupAndExit();
     }
   };
 
-  // Now, add the dynamic menu item in a way that all JS versions understand
   saveMenu[`Save as ${rideType}`] = () => {
     saveRide(rideType);
     resetState();
@@ -150,7 +172,6 @@ function stopRide() {
 function onGPS(fix) {
   lastFix = fix;
 
-  // Start the ride automatically on the first good GPS fix
   if (rideType && !isRunning && fix.fix) {
     isRunning = true;
     startTime = getTime();
@@ -182,7 +203,6 @@ function onGPS(fix) {
 function draw() {
   g.reset().clearRect(Bangle.appRect);
 
-  // GPS indicator
   g.setFont("6x8", 1).setFontAlign(0, -1);
   if (lastFix.fix) {
     g.setColor(0, 1, 0).drawString("GPS", g.getWidth() / 2, 4);
@@ -190,18 +210,15 @@ function draw() {
     g.setColor(1, 0, 0).drawString("GPS", g.getWidth() / 2, 4);
   }
 
-  // Clock
   let now = new Date();
   let timeStr = require("locale").time(now, 1);
   g.setColor(g.theme.fg).setFont("6x8", 2).setFontAlign(0, -1);
   g.drawString(timeStr, g.getWidth() / 2, 16);
 
-  // Speed
   let speed = lastFix.speed.toFixed(1);
   g.setFont("Vector", 80).setFontAlign(0, 0);
   g.drawString(speed, g.getWidth() / 2, 80);
 
-  // Duration
   let durationStr = "00:00:00";
   if (startTime > 0) {
     let duration = getTime() - startTime;
@@ -213,13 +230,15 @@ function draw() {
   g.setFont("6x8", 2).setFontAlign(0, 1);
   g.drawString(durationStr, g.getWidth() / 2, g.getHeight() - 4);
 
-  // Ghost comparison
   if (ghostTrack.length > 0 && isRunning) {
     let diffStr = (timeDiff > 0 ? "+" : "") + Math.round(timeDiff);
-    g.setColor(timeDiff > 0 ? "#f00" : "#0f0"); // Red for behind, Green for ahead
+    g.setColor(timeDiff > 0 ? "#f00" : "#0f0");
     g.setFontAlign(1, 1);
     g.drawString(`${diffStr}s`, g.getWidth() - 4, g.getHeight() - 4);
   }
+  
+  // Update the physical screen with our buffered drawing
+  g.flip();
 }
 
 // ---------------------------
@@ -228,33 +247,52 @@ function draw() {
 function showStartMenu() {
   const startMenu = {
     "": { "title": "Cycle Plus" },
-    "Ride to Work": () => {
-      E.showMenu(); // Clear menu before starting
-      startRide("work");
-    },
-    "Ride to Home": () => {
-      E.showMenu(); // Clear menu before starting
-      startRide("home");
-    },
-    "Exit": () => load(),
+    "Ride to Work": () => { E.showMenu(); startRide("work"); },
+    "Ride to Home": () => { E.showMenu(); startRide("home"); },
+    "Screen Options": showScreenMenu,
+    "Exit": cleanupAndExit,
   };
   E.showMenu(startMenu);
 }
+
+function showScreenMenu() {
+  const screenMenu = {
+    "": { "title": "Screen Options" },
+    "Screen stays on": {
+      value: settings.keepScreenOn,
+      format: v => v ? "Yes" : "No",
+      onchange: v => {
+        settings.keepScreenOn = v;
+        saveSettings();
+        applyScreenTimeout();
+      }
+    },
+    "< Back": showStartMenu
+  };
+  E.showMenu(screenMenu);
+}
+
 
 // ---------------------------
 // Event Listeners & Init
 // ---------------------------
 function setUI() {
   clearWatch();
-  // Press BTN2 to stop/pause the ride
   setWatch(stopRide, BTN2, { repeat: false, edge: "rising" });
 }
 
-Bangle.on('GPS', onGPS);
-// Ensure GPS is turned off when the app is killed
-Bangle.on('kill', () => {
+function cleanupAndExit() {
+  // Turn off GPS
   Bangle.setGPSPower(0, "cycleplus");
-});
+  // Restore original screen settings
+  Bangle.setLCDMode(); 
+  Bangle.setLCDTimeout(systemTimeout);
+  // Exit to the clock
+  load();
+}
+
+Bangle.on('GPS', onGPS);
+Bangle.on('kill', cleanupAndExit);
 
 // ---------------------------
 // Initial Execution
@@ -262,7 +300,14 @@ Bangle.on('kill', () => {
 g.clear();
 Bangle.loadWidgets();
 Bangle.drawWidgets();
+
+// Set up screen buffering to prevent flicker
+Bangle.setLCDMode("doublebuffered");
+
+// Load settings and apply them
+loadSettings();
+applyScreenTimeout();
+
+// Show the first menu
 showStartMenu();
-
-
 
