@@ -211,30 +211,34 @@ function onGPS(fix) {
 // UI and Drawing
 // ---------------------------
 function draw() {
-  g.reset().clearRect(Bangle.appRect);
+  // Use Bangle.appRect to ensure our drawing area is below the widgets
+  const r = Bangle.appRect;
+
+  g.reset().clearRect(r);
 
   // GPS indicator
   g.setFont("6x8", 1).setFontAlign(0, -1);
   if (lastFix.fix) g.setColor(0, 1, 0); else g.setColor(1, 0, 0);
-  g.drawString("GPS", g.getWidth() / 2, 4);
+  g.drawString("GPS", r.w / 2, r.y + 4);
 
   // Clock
   let now = new Date();
   let timeStr = require("locale").time(now, 1);
   g.setColor(g.theme.fg).setFont("6x8", 2).setFontAlign(0, -1);
-  g.drawString(timeStr, g.getWidth() / 2, 16);
+  g.drawString(timeStr, r.w / 2, r.y + 16);
 
   // Speed (Left 2/3)
   let speed = lastFix.speed.toFixed(1);
   g.setFont("Vector", 80).setFontAlign(0, 0);
-  g.drawString(speed, g.getWidth() / 3, 80);
+  g.drawString(speed, r.w / 3, r.y + r.h / 2);
 
   // Distance (Right 1/3)
   let distStr = distance.toFixed(2);
   g.setFont("Vector", 40).setFontAlign(0, 0);
-  g.drawString(distStr, g.getWidth() * 5 / 6, 80);
+  g.drawString(distStr, r.w * 5 / 6, r.y + r.h / 2);
   g.setFont("6x8", 2).setFontAlign(0, 0);
-  g.drawString("km", g.getWidth() * 5 / 6, 110);
+  g.drawString("km", r.w * 5 / 6, r.y + r.h / 2 + 30);
+
 
   // Duration
   let durationStr = "00:00:00";
@@ -246,14 +250,14 @@ function draw() {
     durationStr = ("0" + hours).substr(-2) + ":" + ("0" + mins).substr(-2) + ":" + ("0" + secs).substr(-2);
   }
   g.setFont("6x8", 2).setFontAlign(0, 1);
-  g.drawString(durationStr, g.getWidth() / 2, g.getHeight() - 4);
+  g.drawString(durationStr, r.w / 2, r.y + r.h - 4);
 
   // Ghost comparison
   if (ghostTrack.length > 0 && isRunning) {
     let diffStr = (timeDiff > 0 ? "+" : "") + Math.round(timeDiff);
     g.setColor(timeDiff > 0 ? "#f00" : "#f0f");
     g.setFontAlign(1, 1);
-    g.drawString(`${diffStr}s`, g.getWidth() - 4, g.getHeight() - 4);
+    g.drawString(`${diffStr}s`, r.w - 4, r.y + r.h - 4);
   }
   
   Bangle.drawWidgets();
@@ -326,4 +330,5 @@ applyScreenTimeout();
 
 Bangle.loadWidgets();
 showStartMenu();
+
 
