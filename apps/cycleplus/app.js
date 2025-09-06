@@ -1,14 +1,13 @@
 /*
  * =============================================================
- * Cycle Plus - v6.5 (Final Widget Fix)
+ * Cycle Plus - v7.2 (State Reset Fix)
  * =============================================================
- * A GPS cycling computer with ride saving and ghost comparison.
+ * A GPS cycling computer with ghost race and commute tracking.
  *
- * - FIX: Resolved "Unknown Watch" crash by removing the app's
- * manual button cleanup and letting the Bangle.js menu system
- * manage it, preventing a race condition.
- * - FIX: Removed an aggressive clearWatch() on ride resume that
- * was causing visual glitches in the menu.
+ * - FIX: Resolved a critical state management bug that caused a
+ * crash after completing one ride and starting another. The
+ * app's state is now fully reset when a ride ends, preventing
+ * stale data from causing crashes on subsequent rides.
  * =============================================================
  */
 
@@ -66,9 +65,11 @@ let lastFix = { fix: 0, speed: 0 };
 let track = [];
 let rideType = ""; // "work" or "home"
 let ghostTrack = [];
-let timeDiff = 0; // in seconds
+let distTimeDiff = 0; // Distance-based time difference
+let locTimeDiff = 0; // Location-based time difference
 let drawInterval;
 let lastTrackTime = 0; // For thinning GPS track data
+let lastGhostUpdateTime = 0; // For throttling ghost calculations
 let stopRideWatch; // For managing the pause button watch
 
 // ---------------------------
@@ -90,6 +91,7 @@ function saveRide(type) {
   storage.writeJSON(fileName, data);
 }
 
+// --- Ghost Method 1: Distance-Based ---
 function getGhostTimeAtCurrentDist() {
   if (ghostTrack.length < 2) return 0;
   let currentDist = distance;
@@ -108,6 +110,23 @@ function getGhostTimeAtCurrentDist() {
   return 0;
 }
 
+// --- Ghost Method 2: Location-Based ---
+function getGhostTimeAtCurrentLocation(fix) {
+  if (ghostTrack.length < 2 || !fix.fix) return 0;
+  let minDist = -1;
+  let closestPoint = null;
+
+  for (const p of ghostTrack) {
+    const d = haversine(fix.lat, fix.lon, p.lat, p.lon);
+    if (minDist < 0 || d < minDist) {
+      minDist = d;
+      closestPoint = p;
+    }
+  }
+  return closestPoint ? closestPoint.time : 0;
+}
+
+
 // ---------------------------
 // Core Functions
 // ---------------------------
@@ -117,9 +136,15 @@ function resetState() {
   startTime = 0;
   track = [];
   ghostTrack = [];
-  timeDiff = 0;
+  distTimeDiff = 0;
+  locTimeDiff = 0;
   rideType = "";
   lastTrackTime = 0;
+  lastGhostUpdateTime = 0;
+
+  // FIX: Ensure the watch ID is always cleared when state is reset.
+  stopRideWatch = undefined;
+
   if (drawInterval) {
     clearInterval(drawInterval);
     drawInterval = undefined;
@@ -128,7 +153,7 @@ function resetState() {
 }
 
 function startRide(type) {
-  Bangle.setLCDMode("doublebuffered"); // Turn buffering ON for the ride screen
+  Bangle.setLCDMode("doublebuffered");
   resetState();
   rideType = type;
   loadGhost(type);
@@ -142,7 +167,6 @@ function startRide(type) {
 }
 
 function stopRide() {
-  // CRASH FIX: Don't explicitly clear the watch. Let the menu system handle it.
   isRunning = false;
   if (drawInterval) {
     clearInterval(drawInterval);
@@ -152,11 +176,17 @@ function stopRide() {
   const saveMenu = {
     "": { "title": "Ride Paused" },
     "Continue Ride": () => {
-      E.showMenu(); // Hide menu first
-      Bangle.setLCDMode("doublebuffered"); // Turn buffering back ON
+      E.showMenu();
+      Bangle.setLCDMode("doublebuffered");
       isRunning = true;
+
+      // FIX: Explicitly mark the old watch as gone before setting a new one.
+      // The menu system clears the actual watch; this just updates our variable
+      // to prevent a crash when setUI is called.
+      stopRideWatch = undefined;
+
       setUI();
-      draw(); // Immediate redraw
+      draw();
       drawInterval = setInterval(draw, 1000);
     },
     "Discard & Exit": () => {
@@ -182,6 +212,7 @@ function onGPS(fix) {
     isRunning = true;
     startTime = getTime();
     lastTrackTime = getTime();
+    lastGhostUpdateTime = getTime();
     track.push({ lat: fix.lat, lon: fix.lon, time: 0, dist: 0 });
   }
 
@@ -200,9 +231,16 @@ function onGPS(fix) {
         });
       }
     }
-    let ghostTime = getGhostTimeAtCurrentDist();
-    if (ghostTime > 0) {
-      timeDiff = currentElapsedTime - ghostTime;
+    
+    // Performance: Throttle ghost calculations
+    if (getTime() - lastGhostUpdateTime > 5) {
+      lastGhostUpdateTime = getTime();
+      
+      let ghostDistTime = getGhostTimeAtCurrentDist();
+      if (ghostDistTime > 0) distTimeDiff = currentElapsedTime - ghostDistTime;
+      
+      let ghostLocTime = getGhostTimeAtCurrentLocation(fix);
+      if (ghostLocTime > 0) locTimeDiff = currentElapsedTime - ghostLocTime;
     }
   }
 }
@@ -211,9 +249,7 @@ function onGPS(fix) {
 // UI and Drawing
 // ---------------------------
 function draw() {
-  // Use Bangle.appRect to ensure our drawing area is below the widgets
   const r = Bangle.appRect;
-
   g.reset().clearRect(r);
 
   // GPS indicator
@@ -232,13 +268,29 @@ function draw() {
   g.setFont("Vector", 80).setFontAlign(0, 0);
   g.drawString(speed, r.w / 3, r.y + r.h / 2);
 
-  // Distance (Right 1/3)
+  // --- Data Block (Right 1/3) ---
+  const dataBlockX = r.w * 5 / 6;
+
+  // Total Distance
   let distStr = distance.toFixed(2);
   g.setFont("Vector", 40).setFontAlign(0, 0);
-  g.drawString(distStr, r.w * 5 / 6, r.y + r.h / 2);
+  g.drawString(distStr, dataBlockX, r.y + r.h / 2);
   g.setFont("6x8", 2).setFontAlign(0, 0);
-  g.drawString("km", r.w * 5 / 6, r.y + r.h / 2 + 30);
+  g.drawString("km", dataBlockX, r.y + r.h / 2 + 30);
 
+  if (ghostTrack.length > 0 && isRunning) {
+    // Distance-based diff (Left of distance)
+    let distDiffStr = (distTimeDiff > 0 ? "+" : "") + Math.round(distTimeDiff);
+    g.setColor(distTimeDiff > 0 ? "#f00" : "#0f0").setFont("6x8", 2);
+    g.setFontAlign(1, 0).drawString(distDiffStr, dataBlockX - 35, r.y + r.h / 2);
+    g.setFontAlign(1, 0).drawString("D", dataBlockX - 35, r.y + r.h / 2 - 12);
+
+    // Location-based diff (Right of distance)
+    let locDiffStr = (locTimeDiff > 0 ? "+" : "") + Math.round(locTimeDiff);
+    g.setColor(locTimeDiff > 0 ? "#f00" : "#0f0");
+    g.setFontAlign(-1, 0).drawString(locDiffStr, dataBlockX + 35, r.y + r.h / 2);
+    g.setFontAlign(-1, 0).drawString("L", dataBlockX + 35, r.y + r.h / 2 - 12);
+  }
 
   // Duration
   let durationStr = "00:00:00";
@@ -249,16 +301,8 @@ function draw() {
     let secs = Math.floor(duration % 60);
     durationStr = ("0" + hours).substr(-2) + ":" + ("0" + mins).substr(-2) + ":" + ("0" + secs).substr(-2);
   }
-  g.setFont("6x8", 2).setFontAlign(0, 1);
+  g.setColor(g.theme.fg).setFont("6x8", 2).setFontAlign(0, 1);
   g.drawString(durationStr, r.w / 2, r.y + r.h - 4);
-
-  // Ghost comparison
-  if (ghostTrack.length > 0 && isRunning) {
-    let diffStr = (timeDiff > 0 ? "+" : "") + Math.round(timeDiff);
-    g.setColor(timeDiff > 0 ? "#f00" : "#f0f");
-    g.setFontAlign(1, 1);
-    g.drawString(`${diffStr}s`, r.w - 4, r.y + r.h - 4);
-  }
   
   Bangle.drawWidgets();
   g.flip();
@@ -306,7 +350,7 @@ function showScreenMenu() {
 // Event Listeners & Init
 // ---------------------------
 function setUI() {
-  // GLITCH FIX: Don't do a blanket clearWatch() as it conflicts with menu exit
+  if (stopRideWatch) clearWatch(stopRideWatch);
   stopRideWatch = setWatch(stopRide, BTN2, { repeat: false, edge: "rising" });
 }
 
@@ -330,5 +374,6 @@ applyScreenTimeout();
 
 Bangle.loadWidgets();
 showStartMenu();
+
 
 
