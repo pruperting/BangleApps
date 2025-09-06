@@ -1,6 +1,6 @@
 /*
  * =============================================================
- * Cycle Plus - v6.4 (Final Crash & Glitch Fix)
+ * Cycle Plus - v6.5 (Final Widget Fix)
  * =============================================================
  * A GPS cycling computer with ride saving and ghost comparison.
  *
