@@ -1,12 +1,11 @@
 /*
  * =============================================================
- * Cycle Plus - v8.1 (Pause Menu Fix)
+ * Cycle Plus - v8.3 (Final Font Tweak)
  * =============================================================
  * A GPS cycling computer with ghost race and commute tracking.
  *
- * - CRITICAL FIX: Restored the pause menu functionality. A bug
- * in the button handling logic was causing the app to exit
- * instead of showing the pause menu.
+ * - UI: Adjusted the time/duration font size to an intermediate
+ * size for better readability and layout balance.
  * =============================================================
  */
 
@@ -221,7 +220,7 @@ function draw() {
 
   // Top Bar: Time and Duration
   const topY = 12;
-  g.setFont("6x8", 3).setColor(g.theme.fg);
+  g.setFont("Vector", 20).setColor(g.theme.fg); // Using Vector font for a clean intermediate size
   let now = new Date();
   let timeStr = require("locale").time(now, 1);
   g.setFontAlign(-1, 0).drawString(timeStr, 4, topY);
