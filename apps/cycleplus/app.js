@@ -1,15 +1,13 @@
 /*
  * =============================================================
- * Cycle Plus - v8.4 (Streaming Save & Stability Fix)
+ * Cycle Plus - v9.2 (Save Fail-Safe)
  * =============================================================
  * A GPS cycling computer with ghost race and commute tracking.
  *
- * - CRITICAL FIX (Save Process): Re-architected the ride-saving
- * mechanism to use a memory-efficient streaming process. This
-
- * completely resolves the app freezing on save after long rides.
- * - This also fixes the root cause of ghost file corruption,
- * ensuring ghost data is always consistent and reliable.
+ * - CRITICAL FIX: The app no longer crashes to a black screen
+ * if a user tries to save a ride with no recorded GPS data.
+ * It now displays a clear error message and returns safely
+ * to the main menu.
  * =============================================================
  */
 
@@ -75,37 +73,83 @@ function loadGhost(type) {
   ghostTrack = (data && data.track) ? data.track : [];
 }
 
-// --- CRITICAL FIX: Re-architected save process ---
+// --- Asynchronous save process with manual UI feedback ---
 function saveRide(type) {
+  print("LOG: saveRide() function started.");
   let tmpFile = storage.open(RIDE_FILE, "r");
-  // Check if there's anything to save
-  if (!tmpFile || tmpFile.getLength() === 0) return;
+
+  // --- CRITICAL FIX: Handle the "no data" case gracefully ---
+  if (!tmpFile || tmpFile.getLength() === 0) {
+    print("LOG: No ride data to save. Displaying message and returning to menu.");
+    Bangle.setLCDMode("doublebuffered");
+    g.clear();
+    g.setFont("Vector", 20).setFontAlign(0, 0);
+    g.drawString("No Ride Data", g.getWidth() / 2, g.getHeight() / 2 - 15);
+    g.drawString("Not Saved", g.getWidth() / 2, g.getHeight() / 2 + 15);
+    g.flip();
+    setTimeout(() => {
+        resetState();
+        showStartMenu();
+    }, 2000);
+    return;
+  }
+  // --- End of critical fix ---
+  
+  print("LOG: Ride data found. Preparing to save.");
+
+  Bangle.setLCDMode("doublebuffered");
+  print("LOG: LCD mode set to doublebuffered.");
+  g.clear();
+  g.setFont("Vector", 20).setFontAlign(0, 0);
+  g.drawString("Saving Ride...", g.getWidth() / 2, g.getHeight() / 2);
+  g.flip();
+  print("LOG: Drew 'Saving Ride...' message and flipped screen.");
 
   let finalFileName = `cycleplus.${type}.json`;
-  // Erase the old file before writing the new one
   storage.erase(finalFileName);
   let finalFile = storage.open(finalFileName, "a");
-  
-  // Write the JSON header
+
   finalFile.write(`{"duration":${getTime() - startTime},"track":[`);
   
   let firstLine = true;
-  let line = tmpFile.readLine();
-  while (line) {
-    if (!firstLine) {
-      finalFile.write(","); // Add comma before all but the first object
+
+  function processChunk() {
+    print("LOG: processChunk started.");
+    let linesProcessed = 0;
+    while (linesProcessed < 20) {
+      let line = tmpFile.readLine();
+      if (line === undefined) {
+        finalFile.write("]}");
+        print("LOG: Finished writing file. Drawing 'Ride Saved'.");
+        
+        g.clear();
+        g.setFont("Vector", 20).setFontAlign(0, 0);
+        g.drawString("Ride Saved", g.getWidth() / 2, g.getHeight() / 2);
+        g.flip();
+        print("LOG: Drew 'Ride Saved' message and flipped screen.");
+
+        setTimeout(() => {
+          print("LOG: Resetting state and showing start menu.");
+          resetState();
+          showStartMenu();
+        }, 1500);
+        return;
+      }
+
+      if (!firstLine) finalFile.write(",");
+      
+      let parts = line.split(",");
+      finalFile.write(`{"lat":${parts[0]},"lon":${parts[1]},"time":${parts[2]},"dist":${parts[3]}}`);
+      firstLine = false;
+      linesProcessed++;
     }
-    let parts = line.split(",");
-    // Write each track point as a JSON object string
-    finalFile.write(`{"lat":${parts[0]},"lon":${parts[1]},"time":${parts[2]},"dist":${parts[3]}}`);
-    firstLine = false;
-    line = tmpFile.readLine();
+    print("LOG: Finished a chunk. Scheduling next chunk.");
+    setTimeout(processChunk, 1);
   }
   
-  // Write the JSON footer
-  finalFile.write("]}");
+  print("LOG: Starting initial processChunk.");
+  processChunk();
 }
-// --- End of critical fix ---
 
 function getGhostTimeAtCurrentDist() {
   if (ghostTrack.length < 2) return 0;
@@ -146,7 +190,7 @@ function resetState() {
   rideType = "";
   lastGhostUpdateTime = 0;
   lastPointForDistance = undefined;
-  storage.erase(RIDE_FILE); // Clear temp ride data
+  storage.erase(RIDE_FILE);
   if (drawInterval) clearInterval(drawInterval);
   drawInterval = undefined;
   Bangle.setGPSPower(0, "cycleplus");
@@ -165,6 +209,7 @@ function startRide(type) {
 }
 
 function stopRide() {
+  print("LOG: stopRide() called.");
   isRunning = false;
   if (drawInterval) clearInterval(drawInterval);
   drawInterval = undefined;
@@ -186,11 +231,16 @@ function stopRide() {
   };
 
   saveMenu[`Save as ${rideType}`] = () => {
-    saveRide(rideType);
-    resetState();
-    E.showMessage(`Saved ${rideType} ride`, "Ride Saved");
-    setTimeout(showStartMenu, 1000);
+    print("LOG: 'Save as' menu item selected.");
+    E.showMenu();
+    print("LOG: E.showMenu() called to hide menu.");
+    setTimeout(() => {
+        print("LOG: setTimeout callback fired. Calling saveRide...");
+        saveRide(rideType);
+    }, 50);
   };
+  
+  print("LOG: Showing 'Ride Paused' menu.");
   showMenu(saveMenu);
 }
 
@@ -228,7 +278,6 @@ function onGPS(fix) {
 function draw() {
   g.reset().clearRect(0, 0, g.getWidth(), g.getHeight());
 
-  // Top Bar: Time and Duration
   const topY = 12;
   g.setFont("Vector", 20).setColor(g.theme.fg);
   let now = new Date();
@@ -245,7 +294,6 @@ function draw() {
   }
   g.setFontAlign(1, 0).drawString(durationStr, g.getWidth() - 4, topY);
 
-  // Center Area: Speed and Distance
   const midY = g.getHeight() / 2 + 10;
   let speed = lastFix.speed.toFixed(1);
   g.setFont("Vector", 80).setFontAlign(0, 0);
@@ -257,7 +305,6 @@ function draw() {
   g.setFont("6x8", 2).setFontAlign(0, 0);
   g.drawString("km", g.getWidth() * 5 / 6, midY + 30);
   
-  // Bottom Bar: Ghost Data and GPS status
   const bottomY = g.getHeight() - 12;
   
   if (ghostTrack.length > 0 && isRunning) {
@@ -326,7 +373,7 @@ function cleanupAndExit() {
   resetState();
   Bangle.setLCDMode(); 
   Bangle.setLCDTimeout(systemTimeout);
-  Bangle.setUI(); // Clear custom UI
+  Bangle.setUI();
   load();
 }
 
